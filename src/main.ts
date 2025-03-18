@@ -47,9 +47,9 @@ playerMarker.bindTooltip("You are here");
 interface Cache {
   lat: number;
   lng: number;
-  value: number;
   rectangle: leaflet.Rectangle;
   coins: Geocoin[];
+  updatePopup?: () => void; // Optional function to update popup content
 }
 
 interface Geocoin {
@@ -59,6 +59,66 @@ interface Geocoin {
 // Define global player coin inventory
 const playerCoins: Geocoin[] = [];
 
+function generateCoins(maxCoins: number): Geocoin[] {
+  const coins: Geocoin[] = [];
+  for (let i = 0; i < maxCoins; i++) {
+    coins.push({ ID: generateRandomID() });
+  }
+  return coins;
+}
+
+function collectCoin(cache: Cache): void {
+  // Collect a coin from the cache if available
+  if (cache.coins.length > 0) {
+    const temp = cache.coins.pop(); // Remove the last coin from the cache
+    playerCoins.push(temp!); // Add it to the player's inventory
+  }
+  cache.updatePopup?.(); // Update the popup to reflect the new coin count
+}
+
+function depositCoin(cache: Cache): void {
+  // Deposit a coin into the cache
+  if (playerCoins.length > 0) {
+    const temp = playerCoins.pop(); // Remove the last coin from the player's inventory
+    cache.coins.push(temp!); // Add it to the cache
+  }
+  cache.updatePopup?.(); // Update the popup to reflect the new coin count
+}
+
+function createCachePopup(cache: Cache): void {
+  const popupDiv = document.createElement("div");
+
+  const cacheLocation = document.createElement("h4");
+  cacheLocation.innerText = `Cache at (${cache.lat.toFixed(5)}, ${
+    cache.lng.toFixed(5)
+  })`;
+
+  const coinCount = document.createElement("p");
+  coinCount.innerText = `Contains ${cache.coins.length} coin(s)`;
+
+  const collectButton = document.createElement("button");
+  collectButton.innerText = "Collect Coin";
+  collectButton.addEventListener("click", () => {
+    collectCoin(cache);
+  });
+
+  const depositButton = document.createElement("button");
+  depositButton.innerText = "Deposit Coin";
+  depositButton.addEventListener("click", () => {
+    depositCoin(cache);
+  });
+
+  popupDiv.appendChild(cacheLocation);
+  popupDiv.appendChild(coinCount);
+  popupDiv.appendChild(collectButton);
+  popupDiv.appendChild(depositButton);
+  cache.rectangle.bindPopup(popupDiv);
+
+  cache.updatePopup = () => {
+    coinCount.innerText = `Contains ${cache.coins.length} coin(s)`;
+  };
+}
+/*
 function spawnCache(i: number, j: number) {
   // Convert cell numbers into lat/lng bounds
   const origin = OAKES_CLASSROOM;
@@ -125,17 +185,44 @@ function spawnCache(i: number, j: number) {
   // Bind popup to rectangle
   cache.rectangle.bindPopup(updatePopup);
 }
+*/
+function spawnCache(i: number, j: number) {
+  //convert cells numbers to lat/lng bounds, also account for the offset
+  const cellOffset = TILE_DEGREES / 2;
+  const origin = OAKES_CLASSROOM;
+  const cellBounds = leaflet.latLngBounds([
+    [
+      origin.lat + (i - cellOffset) * TILE_DEGREES,
+      origin.lng + (j - cellOffset) * TILE_DEGREES,
+    ],
+    [
+      origin.lat + (i + 1 + cellOffset) * TILE_DEGREES,
+      origin.lng + (j + 1 + cellOffset) * TILE_DEGREES,
+    ],
+  ]);
+  console.log(`Spawning cache at (${i}, ${j}) with bounds:`, cellBounds);
+  //Create the Cache object
+  const cache: Cache = {
+    lat: (cellBounds.getNorthEast().lat + cellBounds.getSouthWest().lat) / 2,
+    lng: (cellBounds.getNorthEast().lng + cellBounds.getSouthWest().lng) / 2,
+    rectangle: leaflet.rectangle(cellBounds, { color: "blue", weight: 1 }),
+    coins: generateCoins(3), // Start with some random coins
+  };
+  cache.rectangle.addTo(map); // Add the rectangle to the map
+  createCachePopup(cache); // Create the popup for the cache
+  return cache;
+}
 
 function generateRandomID(): string {
   return Math.floor(1000000000 + Math.random() * 9000000000).toString(); // 10-digit random number
 }
-
+/*
 function generateInitialCoins(i: number, j: number): Geocoin[] {
   const numCoins = Math.floor(luck([i, j, "initialCoins"].toString()) * 5);
   return Array.from({ length: numCoins }, () => ({
     ID: generateRandomID(),
   }));
-}
+}*/
 
 // Spawn caches in the neighborhood
 for (let i = -NEIGHBORHOOD_SIZE; i < NEIGHBORHOOD_SIZE; i++) {
