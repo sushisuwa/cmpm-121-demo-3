@@ -11,6 +11,9 @@ import "./leafletWorkaround.ts";
 // Deterministic random number generator
 import luck from "./luck.ts";
 
+// Import the Board class to manage the game board
+import { Board, Cell } from "./board.ts";
+
 // Starting location
 const OAKES_CLASSROOM = leaflet.latLng(36.98949379578401, -122.06277128548504);
 
@@ -19,6 +22,9 @@ const GAMEPLAY_ZOOM_LEVEL = 19;
 const TILE_DEGREES = 1e-4;
 const NEIGHBORHOOD_SIZE = 8;
 const CACHE_SPAWN_PROBABILITY = 0.1;
+
+// Create a board to manage the game area
+const board = new Board(TILE_DEGREES, NEIGHBORHOOD_SIZE);
 
 // Create the map (element with id "map" is defined in index.html)
 const map = leaflet.map(document.getElementById("map")!, {
@@ -45,24 +51,33 @@ playerMarker.bindTooltip("You are here");
 
 //Cache and Geocoin interfaces
 interface Cache {
-  lat: number;
-  lng: number;
+  cell: Cell;
   rectangle: leaflet.Rectangle;
   coins: Geocoin[];
   updatePopup?: () => void; // Optional function to update popup content
 }
-
+// Define the Geocoin interface
 interface Geocoin {
+  i: number;
+  j: number;
   ID: string;
 }
 
 // Define global player coin inventory
 const playerCoins: Geocoin[] = [];
 
-function generateCoins(maxCoins: number): Geocoin[] {
+// Function to generate coins for a cache
+// Each cache starts with a fixed number of coins at its (i, j) location
+// The coins are represented by their (i, j) coordinates and a unique ID
+// The ID is simply the index of the coin in the cache
+function generateCoins(di: number, dj: number, maxCoins: number): Geocoin[] {
   const coins: Geocoin[] = [];
   for (let i = 0; i < maxCoins; i++) {
-    coins.push({ ID: generateRandomID() });
+    coins.push({
+      i: di,
+      j: dj,
+      ID: i.toString(),
+    });
   }
   return coins;
 }
@@ -85,150 +100,105 @@ function depositCoin(cache: Cache): void {
   cache.updatePopup?.(); // Update the popup to reflect the new coin count
 }
 
+// Function to create a popup for a cache
+// The popup displays the cache location, number of coins, and buttons to collect or deposit coins
+// The popup content is generated dynamically to reflect the current state of the cache
 function createCachePopup(cache: Cache): void {
-  const popupDiv = document.createElement("div");
+  function generatePopupContent(): HTMLElement {
+    const popupDiv = document.createElement("div"); // Create a div to hold the popup content
 
-  const cacheLocation = document.createElement("h4");
-  cacheLocation.innerText = `Cache at (${cache.lat.toFixed(5)}, ${
-    cache.lng.toFixed(5)
-  })`;
+    const cacheLocation = document.createElement("h4"); // Create an h4 element for the cache location
+    cacheLocation.innerText = `Cache at (${cache.cell.i}, ${cache.cell.j})`;
 
-  const coinCount = document.createElement("p");
-  coinCount.innerText = `Contains ${cache.coins.length} coin(s)`;
-
-  const collectButton = document.createElement("button");
-  collectButton.innerText = "Collect Coin";
-  collectButton.addEventListener("click", () => {
-    collectCoin(cache);
-  });
-
-  const depositButton = document.createElement("button");
-  depositButton.innerText = "Deposit Coin";
-  depositButton.addEventListener("click", () => {
-    depositCoin(cache);
-  });
-
-  popupDiv.appendChild(cacheLocation);
-  popupDiv.appendChild(coinCount);
-  popupDiv.appendChild(collectButton);
-  popupDiv.appendChild(depositButton);
-  cache.rectangle.bindPopup(popupDiv);
-
-  cache.updatePopup = () => {
+    const coinCount = document.createElement("p"); // Create a paragraph for the coin count
     coinCount.innerText = `Contains ${cache.coins.length} coin(s)`;
-  };
-}
-/*
-function spawnCache(i: number, j: number) {
-  // Convert cell numbers into lat/lng bounds
-  const origin = OAKES_CLASSROOM;
-  const bounds = leaflet.latLngBounds([
-    [origin.lat + i * TILE_DEGREES, origin.lng + j * TILE_DEGREES],
-    [origin.lat + (i + 1) * TILE_DEGREES, origin.lng + (j + 1) * TILE_DEGREES],
-  ]);
 
-  // Create the cache object
-  const cache: Cache = {
-    lat: (bounds.getNorthEast().lat + bounds.getSouthWest().lat) / 2,
-    lng: (bounds.getNorthEast().lng + bounds.getSouthWest().lng) / 2,
-    value: 0, // Value could represent total coins
-    rectangle: leaflet.rectangle(bounds),
-    coins: generateInitialCoins(i, j), // Start with some random coins
-  };
+    const coinDescriptions = document.createElement("p"); // Create a paragraph for the coin descriptions
+    coinDescriptions.innerText = "Coins: ";
+    for (const coin of cache.coins) {
+      const coinElement = document.createElement("p"); // Create a paragraph for each coin
+      coinElement.innerText = `[i: ${coin.i}, j: ${coin.j}] serial: ${coin.ID}`;
+      coinDescriptions.appendChild(coinElement);
+    }
 
-  // Add a rectangle to the map
-  cache.rectangle.addTo(map);
+    const collectButton = document.createElement("button"); // Create a button to collect a coin
+    collectButton.innerText = "Collect Coin";
+    collectButton.addEventListener("click", () => {
+      collectCoin(cache);
+      cache.rectangle.getPopup()?.setContent(generatePopupContent()); // Update the popup content
+    });
 
-  // Function to update popup UI
-  function updatePopup() {
-    const popupDiv = document.createElement("div");
+    const depositButton = document.createElement("button"); // Create a button to deposit a coin
+    depositButton.innerText = "Deposit Coin";
+    depositButton.addEventListener("click", () => {
+      depositCoin(cache);
+      cache.rectangle.getPopup()?.setContent(generatePopupContent()); // Update the popup content
+    });
 
-    popupDiv.innerHTML = `
-      <div>Cache at "${i},${j}". It contains <span id="coin-count">${cache.coins.length}</span> coin(s).</div>
-      <div id="coin-list">${
-      cache.coins.map((c) => `<div>Coin ID: ${c.ID}</div>`).join("")
-    }</div>
-      <button id="collect">Collect Coin</button>
-      <button id="deposit">Deposit Coin</button>`;
-
-    // Collect coin functionality
-    popupDiv.querySelector<HTMLButtonElement>("#collect")!.addEventListener(
-      "click",
-      () => {
-        if (cache.coins.length > 0) {
-          const collectedCoin = cache.coins.pop();
-          if (collectedCoin) {
-            playerCoins.push(collectedCoin);
-            updatePopup(); // Refresh cache popup UI
-          }
-        }
-      },
-    );
-
-    // Deposit coin functionality
-    popupDiv.querySelector<HTMLButtonElement>("#deposit")!.addEventListener(
-      "click",
-      () => {
-        if (playerCoins.length > 0) {
-          const depositedCoin = playerCoins.pop();
-          if (depositedCoin) {
-            cache.coins.push(depositedCoin);
-            updatePopup(); // Refresh cache popup UI
-          }
-        }
-      },
-    );
+    popupDiv.appendChild(cacheLocation);
+    popupDiv.appendChild(coinCount);
+    popupDiv.appendChild(coinDescriptions);
+    popupDiv.appendChild(collectButton);
+    popupDiv.appendChild(depositButton);
 
     return popupDiv;
   }
+  cache.rectangle.bindPopup(generatePopupContent());
 
-  // Bind popup to rectangle
-  cache.rectangle.bindPopup(updatePopup);
+  cache.updatePopup = () => {
+    cache.rectangle.getPopup()?.setContent(generatePopupContent()); // Update the popup content
+  };
 }
-*/
-function spawnCache(i: number, j: number) {
+
+// Function to spawn a cache at a given point
+// The cache is represented by a rectangle on the map and contains a number of coins
+// The cache is created based on the cell corresponding to the given point
+function spawnCache(point: leaflet.LatLng): Cache {
   //convert cells numbers to lat/lng bounds, also account for the offset
-  const cellOffset = TILE_DEGREES / 2;
-  const origin = OAKES_CLASSROOM;
-  const cellBounds = leaflet.latLngBounds([
-    [
-      origin.lat + (i - cellOffset) * TILE_DEGREES,
-      origin.lng + (j - cellOffset) * TILE_DEGREES,
-    ],
-    [
-      origin.lat + (i + 1 + cellOffset) * TILE_DEGREES,
-      origin.lng + (j + 1 + cellOffset) * TILE_DEGREES,
-    ],
-  ]);
-  console.log(`Spawning cache at (${i}, ${j}) with bounds:`, cellBounds);
+  const cell = board.getCellForPoint(point);
+  const bounds = board.getCellBounds(cell);
+
+  console.log(`Spawning cache at grid (${cell.i}, ${cell.j})`);
+
   //Create the Cache object
   const cache: Cache = {
-    lat: (cellBounds.getNorthEast().lat + cellBounds.getSouthWest().lat) / 2,
-    lng: (cellBounds.getNorthEast().lng + cellBounds.getSouthWest().lng) / 2,
-    rectangle: leaflet.rectangle(cellBounds, { color: "blue", weight: 1 }),
-    coins: generateCoins(3), // Start with some random coins
+    cell,
+    rectangle: leaflet.rectangle(bounds, { color: "blue", weight: 1 }),
+    coins: generateCoins(cell.i, cell.j, 3), // Start with some random coins
   };
   cache.rectangle.addTo(map); // Add the rectangle to the map
   createCachePopup(cache); // Create the popup for the cache
   return cache;
 }
 
-function generateRandomID(): string {
-  return Math.floor(1000000000 + Math.random() * 9000000000).toString(); // 10-digit random number
-}
-/*
-function generateInitialCoins(i: number, j: number): Geocoin[] {
-  const numCoins = Math.floor(luck([i, j, "initialCoins"].toString()) * 5);
-  return Array.from({ length: numCoins }, () => ({
-    ID: generateRandomID(),
-  }));
-}*/
+// Create a map to store caches for each cell
+const cacheMap: Map<string, Cache> = new Map();
 
-// Spawn caches in the neighborhood
-for (let i = -NEIGHBORHOOD_SIZE; i < NEIGHBORHOOD_SIZE; i++) {
-  for (let j = -NEIGHBORHOOD_SIZE; j < NEIGHBORHOOD_SIZE; j++) {
-    if (luck([i, j].toString()) < CACHE_SPAWN_PROBABILITY) {
-      spawnCache(i, j);
-    }
+// This allows us to avoid creating multiple caches for the same cell
+// and ensures that we only create one cache per cell
+function getOrCreateCache(point: leaflet.LatLng): Cache {
+  const cell = board.getCellForPoint(point);
+  const key = `${cell.i},${cell.j}`;
+
+  if (cacheMap.has(key)) {
+    return cacheMap.get(key)!;
+  }
+
+  const cache = spawnCache(point);
+  cacheMap.set(key, cache);
+  return cache;
+}
+
+// Spawn caches around the Oakes classroom location
+const nearbyCells = board.getCellsNearPoint(OAKES_CLASSROOM);
+
+// For each nearby cell, determine if a cache should be spawned based on the CACHE_SPAWN_PROBABILITY
+for (const cell of nearbyCells) {
+  const point = leaflet.latLng(
+    -90 + cell.i * TILE_DEGREES,
+    -180 + cell.j * TILE_DEGREES,
+  );
+  if (luck([cell.i, cell.j].toString()) < CACHE_SPAWN_PROBABILITY) {
+    getOrCreateCache(point);
   }
 }
